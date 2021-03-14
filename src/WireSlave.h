@@ -34,6 +34,8 @@
 
 class TwoWireSlave : public Stream
 {
+    //static void i2c_isr_callback(void* arg);
+    
 public:
     TwoWireSlave(uint8_t bus_num);
     ~TwoWireSlave();
@@ -69,14 +71,21 @@ public:
         return write((uint8_t)n);
     }
     
-    void onReceive(void (*)(int));
-    void onRequest(void (*)());
+    inline void onReceive(void (*function)(int)){user_onReceive = function;}
+
+    inline void onRequest(void (*function)(void)){user_onRequest = function;}
+
+    inline void onRawReceive(void (*function)(int,const uint8_t*)){user_onRawReceive = function;}
+
+    void enqueueSend(int size, const uint8_t* buffer);
 
 private:
     uint8_t num;
     i2c_port_t portNum;
     int8_t sda;
     int8_t scl;
+    //intr_handle_t isr_handle_;
+    bool raw_enabled_;
 
     uint8_t rxBuffer[I2C_BUFFER_LENGTH];
     uint16_t rxIndex;
@@ -91,6 +100,8 @@ private:
 
     void (*user_onRequest)(void);
     void (*user_onReceive)(int);
+
+    void (*user_onRawReceive)(int,const uint8_t*);
 
     WirePacker packer_;
     WireUnpacker unpacker_;

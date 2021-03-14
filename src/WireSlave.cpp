@@ -8,6 +8,8 @@
 #ifdef ARDUINO_ARCH_ESP32
 #include <Arduino.h>
 #include <driver/i2c.h>
+#include <soc/i2c_reg.h>
+#include <esp_err.h>
 
 #include "WireSlave.h"
 
@@ -16,6 +18,7 @@ TwoWireSlave::TwoWireSlave(uint8_t bus_num)
     ,portNum(i2c_port_t(bus_num & 1))
     ,sda(-1)
     ,scl(-1)
+//    ,isr_handle_(nullptr)
     ,rxIndex(0)
     ,rxLength(0)
     ,rxQueued(0)
@@ -33,6 +36,7 @@ TwoWireSlave::~TwoWireSlave()
 {
     flush();
     i2c_driver_delete(portNum);
+    //i2c_isr_free(isr_handle_);
 }
 
 
@@ -54,6 +58,17 @@ bool TwoWireSlave::begin(int sda, int scl, int address)
         return false;
     }
 
+
+    // int intr_alloc_flags = 0;//I2C_SLAVE_TRAN_COMP_INT_RAW;//I2C_END_DETECT_INT_RAW;
+    // res = i2c_isr_register(portNum, &TwoWireSlave::i2c_isr_callback, this, intr_alloc_flags, &isr_handle_);
+    // if (res != ESP_OK) {
+    //     log_e("failed to register I2C isr");
+    //     Serial.print("failed to register I2C isr: ");
+    //     Serial.print(esp_err_to_name(res));
+    //     Serial.print(" ");
+    //     Serial.println(res);
+    // }
+
     res = i2c_driver_install(
             portNum,
             config.mode,
@@ -64,7 +79,63 @@ bool TwoWireSlave::begin(int sda, int scl, int address)
     if (res != ESP_OK) {
         log_e("failed to install I2C driver");
     }
+
     return res == ESP_OK;
+}
+
+// void TwoWireSlave::i2c_isr_callback(void* arg)
+// {
+//     Serial.print("i2c_isr_callback: ");
+//     TwoWireSlave* me = reinterpret_cast<TwoWireSlave*>(arg);
+//     int interruptNo = esp_intr_get_intno(me->isr_handle_);
+//     Serial.println(interruptNo);
+//     Serial.print(", R ");
+//     Serial.print(*((volatile uint32_t *) (I2C_INT_RAW_REG(0))));
+//     Serial.print(" ");
+//     Serial.println(*((volatile uint32_t *) (I2C_INT_RAW_REG(1))));
+//     Serial.print(", E ");
+//     Serial.print(*((volatile uint32_t *) (I2C_INT_ENA_REG(0))));
+//     Serial.print(" ");
+//     Serial.println(*((volatile uint32_t *) (I2C_INT_ENA_REG(1))));
+//     Serial.print(", S ");
+//     Serial.print(*((volatile uint32_t *) (I2C_INT_STATUS_REG(0))));
+//     Serial.print(" ");
+//     Serial.println(*((volatile uint32_t *) (I2C_INT_STATUS_REG(1))));
+
+        
+
+//     *((volatile uint32_t *) (I2C_INT_CLR_REG(0))) |= interruptNo;
+//     *((volatile uint32_t *) (I2C_INT_CLR_REG(0))) |= 0xff;
+//     *((volatile uint32_t *) (I2C_INT_CLR_REG(1))) |= 0xff;
+
+//     esp_intr_disable(me->isr_handle_);
+//     esp_intr_enable(me->isr_handle_);
+
+//     uint8_t inputBuffer[I2C_BUFFER_LENGTH] = {0};
+//     int16_t inputLen = 0;
+
+//     //inputLen = i2c_slave_read_buffer(me->portNum, inputBuffer, I2C_BUFFER_LENGTH, 1);
+//     // Serial.print("read: ");
+//     // Serial.println(inputLen);
+
+    
+// 	// if(i2c_isr_free(me->isr_handle_) == ESP_OK)
+//     // {
+// 	// 	me->isr_handle_ = nullptr;
+// 	// 	ets_printf("Free-ed interrupt handler\n");
+// 	// }
+//     // else
+//     // {
+// 	// 	ets_printf("Failed to free interrupt handler\n");
+// 	// }
+// }
+
+
+void TwoWireSlave::enqueueSend(int size, const uint8_t* buffer)
+{
+    //Serial.println("sending");
+    i2c_reset_tx_fifo(portNum);
+    i2c_slave_write_buffer(portNum, const_cast<uint8_t*>(buffer), size, 0);
 }
 
 void TwoWireSlave::update()
@@ -72,10 +143,19 @@ void TwoWireSlave::update()
     uint8_t inputBuffer[I2C_BUFFER_LENGTH] = {0};
     int16_t inputLen = 0;
 
+    //Serial.print("TwoWireSlave::update(), ");
     inputLen = i2c_slave_read_buffer(portNum, inputBuffer, I2C_BUFFER_LENGTH, 1);
 
     if (inputLen <= 0) {
         // nothing received or error
+        //Serial.println("nothing received");
+        return;
+    }
+
+    if(user_onRawReceive)
+    {
+        //Serial.println("received");
+        user_onRawReceive(inputLen, inputBuffer);
         return;
     }
 
@@ -89,10 +169,12 @@ void TwoWireSlave::update()
     if (unpacker_.isPacketOpen() || unpacker_.totalLength() == 0) {
         // still waiting bytes,
         // or received bytes that are not inside a packet
+        //Serial.println("waiting bytes");
         return;
     }
 
     if (unpacker_.hasError()) {
+        //Serial.println("unpacker_.hasError");
         return;
     }
 
@@ -185,15 +267,6 @@ void TwoWireSlave::flush(void)
     i2c_reset_tx_fifo(portNum);
 }
 
-void TwoWireSlave::onReceive(void (*function)(int))
-{
-    user_onReceive = function;
-}
-
-void TwoWireSlave::onRequest(void (*function)(void))
-{
-    user_onRequest = function;
-}
 
 TwoWireSlave WireSlave = TwoWireSlave(0);
 TwoWireSlave WireSlave1 = TwoWireSlave(1);
